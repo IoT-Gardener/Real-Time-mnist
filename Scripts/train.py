@@ -1,18 +1,20 @@
-import json
 import keras
+import mlflow
+import mlflow.tensorflow
 import numpy as np
+import os
 from keras.datasets import mnist
-from keras.utils import to_categorical
-from keras.models import Sequential
-from keras.layers import Conv2D
-from keras.layers import MaxPooling2D
-from keras.layers import Dense
-from keras.layers import Flatten
+from keras.utils import to_categorical 
+from keras.models import Sequential, load_model
+from keras.layers import Conv2D, MaxPooling2D, Dense, Flatten
 from keras.optimizers import SGD
-from keras.models import load_model
-from pathlib import Path
 from sklearn.metrics import classification_report
 
+# Set the mlflow tracking to databricks managed mlflow
+mlflow_uri = "databricks"
+mlflow.set_tracking_uri(mlflow_uri)
+# Set mlflow to log every iteration
+mlflow.tensorflow.autolog(every_n_iter=1, registered_model_name="mnist-tf-cnn")
 
 def load_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Function to load the mnist dataset from keras
@@ -84,39 +86,36 @@ def build_model() -> keras.engine.sequential.Sequential:
 
 
 if __name__ == "__main__":
-    # Load the training and test dataset
-    trainX, trainY, testX, testY = load_dataset()
-    
-    # Preprocess the data
-    trainX, testX = preprocess(trainX, testX)
+    # Set the MLFlow experiment from the URL
+    experiment_name = os.getenv("MNIST_EXPERIMENT")
+    if experiment_name is not None:
+        mlflow.set_experiment(experiment_name=experiment_name)
 
-    # Build and compile the model
-    model = build_model()
+    # Start an MLFlow run
+    with mlflow.start_run(run_name="Alex Local Train") as run:
+        # Load the training and test dataset
+        trainX, trainY, testX, testY = load_dataset()
+        
+        # Preprocess the data
+        trainX, testX = preprocess(trainX, testX)
 
-    # Fit the model on the training data
-    model.fit(trainX, trainY, epochs=3, batch_size=32, verbose=1)
-    
-    # Save the model to a .h5 file in the app
-    model.save(f"{Path(__file__).parents[0]}/../app/data/final_model.h5")
+        # Build and compile the model
+        model = build_model()
 
-    # Load the model from the app
-    model = load_model(f"{Path(__file__).parents[0]}/../app/data/final_model.h5")
+        # Fit the model on the training data
+        model.fit(trainX, trainY, epochs=3, batch_size=32, verbose=1)
 
-    # Get predictions test data   
-    predictions = model.predict(testX)
-    # Get a single class for each prediction
-    predY = np.argmax(predictions, axis=1)
-    # Get a single class for each test label
-    testYc = np.argmax(testY, axis=1)
+        # Get predictions test data   
+        predictions = model.predict(testX)
+        # Get a single class for each prediction
+        predY = np.argmax(predictions, axis=1)
+        # Get a single class for each test label
+        testYc = np.argmax(testY, axis=1)
 
-    # Evaluate performance of the model
-    results = classification_report(testYc, predY, output_dict=True)
-    # Create a dictionary containing the results
-    score_card = {
-        "accuracy": results["accuracy"],
-        "precision": results["macro avg"]["precision"],
-        "recall": results["macro avg"]["recall"],
-        "f1": results["macro avg"]["f1-score"]
-    }
-    # Save the score card as a json file in the app
-    json.dump(score_card, open(f"{Path(__file__).parents[0]}/../app/data/score_card.json", "w"))
+        # Evaluate performance of the model
+        results = classification_report(testYc, predY, output_dict=True)
+
+        # Log test results to MLFlow
+        mlflow.log_metric("precision", results["macro avg"]["precision"])
+        mlflow.log_metric("recall", results["macro avg"]["recall"])
+        mlflow.log_metric("f1", results["macro avg"]["f1-score"])
