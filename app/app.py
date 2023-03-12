@@ -1,32 +1,84 @@
 import json
+import keras
 import logging
+import mlflow
 import requests
 import numpy as np
 import pandas as pd
 import streamlit as st
-from keras.models import load_model
+from mlflow.tracking import MlflowClient
 from pathlib import Path
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 from streamlit_lottie import st_lottie
 
 
+# Set the mlflow tracking to databricks managed mlflow
+mlflow_uri = "databricks"
+client = MlflowClient(tracking_uri=mlflow_uri)
+mlflow.set_tracking_uri(mlflow_uri)
+
+
+@st.cache_resource
+def load_model() -> keras.engine.sequential.Sequential:
+    """
+    Function to load the model from MLFlow and assign it to the global MODEL variable
+    Returns:
+        keras.engine.sequential.Sequential: mnist model
+    """
+    # Load the model from MLFlow
+    try:
+        model = mlflow.tensorflow.load_model(model_uri="models:/mnist-tf-cnn/Production")
+        logging.info("Successfully loaded model")
+    # If unable to load model, print error and set model to None
+    except Exception as e:
+        logging.error(f"Error loading model, {e}")
+        model = None
+
+    return model
+
+
+@st.cache_resource
+def get_model_metrics() -> dict:
+    try:
+        # Iterate over all register models
+        for mv in client.search_model_versions("name='mnist-tf-cnn'"):
+            # Store the run id of the production model
+            if dict(mv)["current_stage"] == "Production":
+                run_id = dict(mv)['run_id']
+        # Create a dictionary to store the scorecard
+        scorecard = {}
+        # Get the value of the metric from the most recent time step for each metric
+        scorecard["accuracy"] = dict(client.get_metric_history(run_id, "accuracy")[-1])['value']
+        scorecard["precision"] = dict(client.get_metric_history(run_id, "precision")[-1])['value']
+        scorecard["recall"] = dict(client.get_metric_history(run_id, "recall")[-1])['value']
+        scorecard["f1"] = dict(client.get_metric_history(run_id, "f1")[-1])['value']
+        logging.info("Loaded model scorecard")
+        return scorecard
+    except Exception as e:
+        logging.error(f"Failed to load model metrics, {e}")
+        return None
+
+
+@st.cache_resource
 def load_assets(url: str) -> dict:
     """Function load asset from a http get request
     Args:
         url (str): URL of the asset to load
     Returns:
-        dict: _description_
+        dict: Lottie media json
     """
+    # Request the asset from lottie
     asset = requests.get(url)
+    # If the request is not successful, return an error
     if asset.status_code != 200:
         logging.error("Failed to load asset")
-        return None
-        
+        return {"Response": "Error"}
+    # Otherwise return the json format of the media
     else:
         logging.info("Asset loaded successfully")
         return asset.json()
-    
+
 
 def format_image(img: np.ndarray) -> np.ndarray:
     """Function to convert an RBG image to grey scale
@@ -53,13 +105,13 @@ def format_image(img: np.ndarray) -> np.ndarray:
     reshaped = norm.reshape(1, 28, 28, 1)
     return reshaped
 
-# Load assets
-lottie_cv = load_assets("https://assets10.lottiefiles.com/private_files/lf30_dmituz7c.json")
-scorecard = data = json.load(open(f"{Path(__file__).parents[0]}/data/scorecard.json"))
-model = load_model(f"{Path(__file__).parents[0]}/../app/data/final_model.h5")
-
 # Set the page title and icon and set layout to "wide" to minimise margains
 st.set_page_config(page_title="Real Time CV", page_icon=":1234:")
+
+# Load assets
+lottie_cv = load_assets("https://assets10.lottiefiles.com/private_files/lf30_dmituz7c.json")
+model = load_model()
+scorecard = get_model_metrics()
 
 # Title and intro container
 with st.container():
@@ -70,70 +122,83 @@ with st.container():
         st.title("Real Time Number Classification")
         st.write("Model scorecard and real time endpoint for a CNN trained to classify hand written numbers.")
     with title_right_col:
-        # Add a lottie animation
-        st_lottie(lottie_cv, key="cv animation", width=200)
+        if "Response" in lottie_cv.keys() and lottie_cv["Response"] == "Error":
+            pass
+        else:
+            # Add a lottie animation
+            st_lottie(lottie_cv, key="cv animation", width=200)
 
     st.write("---")
-    
-# Scorecard container
-with st.container():
-    # Add a title
-    st.header("Model Scorecard")
-    st.write("A breakdown of the performance of the production model.")
-    # Create 4 columns, one for each metric
-    col1, col2, col3, col4 = st.columns(4)
-    # Add an accuracy scordcard, with a tooltip
-    col1.metric("Accuracy", f"{scorecard['accuracy']}%", 
-                help="the percentage of **correctly** classified samples of the **total** number of classified samples")
-    # Add a precision scorecard, with a tooltip
-    col2.metric("Avg. Precision", f"{scorecard['precision']}%", 
-                help="The percentage of **correctly** classified samples out of the classifications made for that class, Averaged across all classes")
-    # Add a recall scorecard with a tooltip
-    col3.metric("Avg. Recall", f"{scorecard['recall']}%", 
-                help="The percentage **correctly** classified samples out of the total samples for that class. Averaged across all classes.")
-    # Add an F-1 score scorecard with a tooltip
-    col4.metric("Avg. F-1 Score", f"{scorecard['f1']}", 
-                help="A performance metric calculated as the harmonic mean of precision and recall for a class. Averaged across all classes")
-    st.write("---")
 
-# Canvas container
-with st.container():
-    st.header("Real Time Classification")
-    st.write("Please draw a number between 0 & 9 in the box below to recieve a classification.")
-    model_left, model_right = st.columns((1,2))
-    
-    with model_left:
-    # Create a canvas component
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 165, 0, 0.3)",  # Fixed fill color with some opacity
-            stroke_width=10,
-            stroke_color="#ffffff",
-            background_color="#000000",
-            update_streamlit=True,
-            height=224,
-            width=224,
-            drawing_mode="freedraw",
-            point_display_radius=0,
-            key="canvas"
-        )
+# Check if a model was loaded
+if model==None:
+    # If no model was loaded inform the user
+    with st.container():
+        st.write("Unable to load production model, please try again later.")
+        # Create button to try loading the model again
+        if st.button("Try again"):
+            st.cache_resource.clear()
 
-    with model_right:
-        # Do something interesting with the image data and paths
-        if canvas_result.image_data is not None:
+else:
+    # Scorecard container
+    with st.container():
+        # Add a title
+        st.header("Model Scorecard")
+        st.write("A breakdown of the performance of the production model.")
+        if scorecard == None:
+            st.write("No scorecard data could be loaded, please reload try again later using the 'reload data' button below")
+        else:
+            # Create 4 columns, one for each metric
+            col1, col2, col3, col4 = st.columns(4)
+            # Add an accuracy scordcard, with a tooltip
+            col1.metric("Accuracy", f"{round(scorecard['accuracy'],4)}", 
+                        help="the percentage of **correctly** classified samples of the **total** number of classified samples")
+            # Add a precision scorecard, with a tooltip
+            col2.metric("Avg. Precision", f"{round(scorecard['precision'],4)}", 
+                        help="The percentage of **correctly** classified samples out of the classifications made for that class, Averaged across all classes")
+            # Add a recall scorecard with a tooltip
+            col3.metric("Avg. Recall", f"{round(scorecard['recall'],4)}", 
+                        help="The percentage **correctly** classified samples out of the total samples for that class. Averaged across all classes.")
+            # Add an F-1 score scorecard with a tooltip
+            col4.metric("Avg. F-1 Score", f"{round(scorecard['f1'],4)}", 
+                        help="A performance metric calculated as the harmonic mean of precision and recall for a class. Averaged across all classes")
+        st.write("---")
 
-            # Get the output from the canvas
-            model_input = format_image(canvas_result.image_data)
-            # Query the model
-            prediction = model.predict(model_input)
-            
-            df= pd.DataFrame({
-                "Class": ["0","1", "2", "3", "4", "5", "6", "7", "8", "9"],
-                "Probability": prediction[0]
-            }   
+    # Canvas container
+    with st.container():
+        # Add section headers and description
+        st.header("Real Time Classification")
+        st.write("Please draw a number between 0 & 9 in the box below to recieve a classification.")
+
+        # Create two columns
+        model_left, model_right = st.columns((1,2))
+
+        with model_left:
+        # Create a canvas component
+            canvas_result = st_canvas(
+                fill_color="rgba(255, 165, 0, 0.3)",  # Fixed fill color with some opacity
+                stroke_width=10,
+                stroke_color="#ffffff",
+                background_color="#000000",
+                update_streamlit=True,
+                height=224,
+                width=224,
+                drawing_mode="freedraw",
+                point_display_radius=0,
+                key="canvas"
             )
-            st.bar_chart(prediction[0])
+            if st.button("Reload data"):
+                st.cache_resource.clear()
 
-            
+        with model_right:
+            # Do something interesting with the image data
+            if canvas_result.image_data is not None:
+                # Get the output from the canvas
+                model_input = format_image(canvas_result.image_data)
+                # Query the model
+                prediction = model.predict(model_input)
+                # Display a barchart of the predictions
+                st.bar_chart(prediction[0])
 
 # Footer section
 with st.container():
