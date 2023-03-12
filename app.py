@@ -6,12 +6,18 @@ import requests
 import numpy as np
 import pandas as pd
 import streamlit as st
+from databricks_cli.sdk.api_client import ApiClient
 from mlflow.tracking import MlflowClient
 from pathlib import Path
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 from streamlit_lottie import st_lottie
 
+# Connect to the databricks API client
+api_client = ApiClient(
+  host  = st.secrets["DATABRICKS_HOST"],
+  token = st.secrets["DATABRICKS_TOKEN"]
+)
 
 # Set the mlflow tracking to databricks managed mlflow
 mlflow_uri = "databricks"
