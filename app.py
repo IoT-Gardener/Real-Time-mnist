@@ -210,5 +210,5 @@ else:
 with st.container():
     st.write("""
     **Author**: Alex.B, :wave: [LinkedIn](https://www.linkedin.com/in/alexander-billington-29488b118/) 
-    :books: [Github](https://github.com/ABillington96) :computer: [Website](https://abmlops.streamlit.app)
+    :books: [Github](https://github.com/IoT-Gardener) :computer: [Website](https://abmlops.streamlit.app)
     """)
