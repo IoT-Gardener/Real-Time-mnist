@@ -15,7 +15,7 @@ from streamlit_lottie import st_lottie
 
 # Connect to the databricks API client
 api_client = ApiClient(
-  host  = st.secrets["DATABRICKS_HOST"],
+  host = st.secrets["DATABRICKS_HOST"],
   token = st.secrets["DATABRICKS_TOKEN"]
 )
 

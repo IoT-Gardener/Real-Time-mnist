@@ -6,3 +6,5 @@ keras==2.11.0
 scikit-learn==1.2.1
 mlflow==2.2.1
 databricks-cli==0.17.4
+altair<5
+urllib3==1.26.15
